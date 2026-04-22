@@ -33,12 +33,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
   build-and-inject:
     name: Build NeoFreeBird
     runs-on: macos-latest
     permissions:
       contents: write
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout main repo
@@ -46,19 +49,23 @@ jobs:
         with:
           repository: NeoFreeBird/app
           path: main
-          ref: ${{ inputs.repo_commit || github.ref }}
+          ref: ${{ inputs.repo_commit != '' && inputs.repo_commit || 'master' }}
           submodules: recursive
 
-      - name: Checkout tweak repo (NeoFreeBird/tweak)
+      - name: Checkout tweak repo
         uses: actions/checkout@v4
         with:
           repository: NeoFreeBird/tweak
           path: tweak
-          ref: ${{ inputs.tweak_commit || 'refs/heads/master' }}
+          ref: ${{ inputs.tweak_commit != '' && inputs.tweak_commit || 'master' }}
           submodules: recursive
 
-      - name: Install Dependencies
-        run: brew install make dpkg ldid
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          brew install make dpkg ldid wget
+          python3 -m pip install --upgrade pip
+          python3 -m pip install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Add GNU Make to PATH
         run: |
@@ -72,69 +79,94 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: Install cyan
-        run: pip install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
-
-      - name: Prepare Twitter/X iPA
+      - name: Download iOS SDK
         run: |
-          wget "$IPA_URL" --no-verbose -O main/packages/com.atebits.Tweetie2.ipa
-          unzip -q main/packages/com.atebits.Tweetie2.ipa -d main/tmp
-          X_VERSION=$(grep -A 1 '<key>CFBundleShortVersionString</key>' main/tmp/Payload/Twitter.app/Info.plist |
-            grep '<string>' | awk -F'[><]' '{print $3}')
+          set -euxo pipefail
+          git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/ sdks
+          cd sdks
+          git sparse-checkout init --no-cone
+          git sparse-checkout set "iPhoneOS${{ inputs.sdk_version }}.sdk"
+          git checkout
+          mkdir -p "${THEOS}/sdks"
+          mv "iPhoneOS${{ inputs.sdk_version }}.sdk" "${THEOS}/sdks/"
+        env:
+          THEOS: ${{ github.workspace }}/theos
+
+      - name: Prepare Twitter/X IPA
+        run: |
+          set -euxo pipefail
+
+          mkdir -p "${GITHUB_WORKSPACE}/main/packages"
+          rm -rf "${GITHUB_WORKSPACE}/main/tmp"
+          mkdir -p "${GITHUB_WORKSPACE}/main/tmp"
+
+          wget "$IPA_URL" --no-verbose -O "${GITHUB_WORKSPACE}/main/packages/com.atebits.Tweetie2.ipa"
+          unzip -q "${GITHUB_WORKSPACE}/main/packages/com.atebits.Tweetie2.ipa" -d "${GITHUB_WORKSPACE}/main/tmp"
+
+          APP_PATH="${GITHUB_WORKSPACE}/main/tmp/Payload/Twitter.app"
+          test -d "$APP_PATH"
+
+          X_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
           echo "X_VERSION=${X_VERSION}" >> "$GITHUB_ENV"
           echo "$X_VERSION"
         env:
           IPA_URL: ${{ inputs.decrypted_ipa_url }}
 
-      - name: Download iOS SDK
-        if: steps.SDK.outputs.cache-hit != 'true'
-        run: |
-          git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
-          cd sdks
-          git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
-          git checkout
-          mv ./*.sdk "${THEOS}/sdks"
-        env:
-          THEOS: ${{ github.workspace }}/theos
-
       - name: Build tweak with Theos
         run: |
-          cd tweak
+          set -euxo pipefail
+          cd "${GITHUB_WORKSPACE}/tweak"
           sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ inputs.sdk_version }}:${{ inputs.target_version }}/" Makefile
-          make package
+          make clean package
         env:
           THEOS: ${{ github.workspace }}/theos
 
       - name: Copy deb to main/packages
         run: |
-         mkdir -p main/packages
-         find tweak -type f -name "*.deb" -exec cp {} main/packages/ \;
-         echo "Files in main/packages after copy:"
-         ls -lh main/packages
+          set -euxo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/main/packages"
+          find "${GITHUB_WORKSPACE}/tweak" -type f -name "*.deb" -exec cp {} "${GITHUB_WORKSPACE}/main/packages/" \;
+          echo "Files in main/packages after copy:"
+          ls -lh "${GITHUB_WORKSPACE}/main/packages"
 
       - name: Apply patches and inject tweak
         run: |
-          # Apply patches to the extracted Twitter.app
-          PATCH_SRC="main/assets/main"
-          if [ -d "${PATCH_SRC}" ]; then
-          rsync -av "${PATCH_SRC}/" main/tmp/Payload/Twitter.app/
+          set -euxo pipefail
+
+          WORKROOT="${GITHUB_WORKSPACE}"
+          APP_DIR="${WORKROOT}/main/tmp/Payload/Twitter.app"
+          PATCH_SRC="${WORKROOT}/main/assets/main"
+          PKG_DIR="${WORKROOT}/main/packages"
+          TEMP_IPA="${PKG_DIR}/temp.ipa"
+          OUT_IPA="${PKG_DIR}/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.ipa"
+          OUT_TIPA="${PKG_DIR}/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.tipa"
+
+          test -d "$APP_DIR"
+          mkdir -p "$PKG_DIR"
+
+          if [ -d "$PATCH_SRC" ]; then
+            rsync -av "$PATCH_SRC/" "$APP_DIR/"
           fi
-    
-          # Find the .deb file in main/packages
-          DEB_FILE=$(find main/packages -name "*.deb" -type f | head -n1)
+
+          DEB_FILE="$(find "$PKG_DIR" -maxdepth 1 -type f -name '*.deb' | head -n1)"
           if [ -z "$DEB_FILE" ]; then
-          echo "❌ No .deb file found in main/packages"
-          exit 1
+            echo "No .deb file found in $PKG_DIR"
+            exit 1
           fi
-    
-          # Use cyan to inject the tweak
-          cd main/tmp
-          zip -qr ../packages/temp.ipa Payload
-          cd ..
-          cyan -i packages/temp.ipa -f "$DEB_FILE" -o packages/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.ipa
-    
-          # Create .tipa copy
-          cp packages/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.ipa packages/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.tipa
+
+          rm -f "$TEMP_IPA"
+          cd "${WORKROOT}/main/tmp"
+          zip -qr "$TEMP_IPA" Payload
+
+          python3 -m pyzule \
+            -i "$TEMP_IPA" \
+            -f "$DEB_FILE" \
+            -o "$OUT_IPA"
+
+          cp "$OUT_IPA" "$OUT_TIPA"
+
+          echo "Created files:"
+          ls -lh "$OUT_IPA" "$OUT_TIPA"
 
       - name: Pass package name
         id: package_name
@@ -146,12 +178,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NeoFreeBird-injected-IPA
-          path: main/packages/${{ steps.package_name.outputs.ipa_package }}
+          path: ${{ github.workspace }}/main/packages/${{ steps.package_name.outputs.ipa_package }}
           if-no-files-found: error
 
       - name: Upload TIPA
         uses: actions/upload-artifact@v4
         with:
           name: NeoFreeBird-injected-TIPA
-          path: main/packages/${{ steps.package_name.outputs.tipa_package }}
+          path: ${{ github.workspace }}/main/packages/${{ steps.package_name.outputs.tipa_package }}
           if-no-files-found: error
