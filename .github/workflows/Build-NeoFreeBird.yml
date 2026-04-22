@@ -18,12 +18,12 @@ on:
         required: true
         type: string
       repo_commit:
-        description: "(Optional) Commit for main repo (patches)"
+        description: "(Optional) Commit/branch/tag for main repo"
         default: ""
         required: false
         type: string
       tweak_commit:
-        description: "(Optional) Commit for tweak repo"
+        description: "(Optional) Commit/branch/tag for tweak repo"
         default: ""
         required: false
         type: string
@@ -45,19 +45,37 @@ jobs:
 
     steps:
       - name: Checkout main repo
+        if: ${{ inputs.repo_commit == '' }}
         uses: actions/checkout@v4
         with:
           repository: NeoFreeBird/app
           path: main
-          ref: ${{ inputs.repo_commit != '' && inputs.repo_commit || 'master' }}
+          submodules: recursive
+
+      - name: Checkout main repo at specific ref
+        if: ${{ inputs.repo_commit != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: NeoFreeBird/app
+          path: main
+          ref: ${{ inputs.repo_commit }}
           submodules: recursive
 
       - name: Checkout tweak repo
+        if: ${{ inputs.tweak_commit == '' }}
         uses: actions/checkout@v4
         with:
           repository: NeoFreeBird/tweak
           path: tweak
-          ref: ${{ inputs.tweak_commit != '' && inputs.tweak_commit || 'master' }}
+          submodules: recursive
+
+      - name: Checkout tweak repo at specific ref
+        if: ${{ inputs.tweak_commit != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: NeoFreeBird/tweak
+          path: tweak
+          ref: ${{ inputs.tweak_commit }}
           submodules: recursive
 
       - name: Install dependencies
@@ -126,7 +144,6 @@ jobs:
           set -euxo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/main/packages"
           find "${GITHUB_WORKSPACE}/tweak" -type f -name "*.deb" -exec cp {} "${GITHUB_WORKSPACE}/main/packages/" \;
-          echo "Files in main/packages after copy:"
           ls -lh "${GITHUB_WORKSPACE}/main/packages"
 
       - name: Apply patches and inject tweak
@@ -154,18 +171,13 @@ jobs:
             exit 1
           fi
 
-          rm -f "$TEMP_IPA"
           cd "${WORKROOT}/main/tmp"
           zip -qr "$TEMP_IPA" Payload
 
-          python3 -m pyzule \
-            -i "$TEMP_IPA" \
-            -f "$DEB_FILE" \
-            -o "$OUT_IPA"
+          cd "${WORKROOT}"
+          python3 -m pyzule -i "$TEMP_IPA" -f "$DEB_FILE" -o "$OUT_IPA"
 
           cp "$OUT_IPA" "$OUT_TIPA"
-
-          echo "Created files:"
           ls -lh "$OUT_IPA" "$OUT_TIPA"
 
       - name: Pass package name
