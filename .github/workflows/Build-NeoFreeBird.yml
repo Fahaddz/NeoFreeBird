@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       decrypted_ipa_url:
-        description: "Direct URL of the decrypted Twitter/X ipa"
+        description: "Direct URL of the decrypted Twitter/X IPA"
         required: true
         type: string
       sdk_version:
@@ -18,12 +18,12 @@ on:
         required: true
         type: string
       repo_commit:
-        description: "(Optional) Commit/branch/tag for main repo"
+        description: "(Optional) Commit/branch/tag for NeoFreeBird/app"
         default: ""
         required: false
         type: string
       tweak_commit:
-        description: "(Optional) Commit/branch/tag for tweak repo"
+        description: "(Optional) Commit/branch/tag for NeoFreeBird/tweak"
         default: ""
         required: false
         type: string
@@ -43,51 +43,45 @@ jobs:
       run:
         shell: bash
 
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
     steps:
       - name: Checkout main repo
-        if: ${{ inputs.repo_commit == '' }}
         uses: actions/checkout@v4
         with:
           repository: NeoFreeBird/app
           path: main
-          submodules: recursive
-
-      - name: Checkout main repo at specific ref
-        if: ${{ inputs.repo_commit != '' }}
-        uses: actions/checkout@v4
-        with:
-          repository: NeoFreeBird/app
-          path: main
-          ref: ${{ inputs.repo_commit }}
+          ref: ${{ inputs.repo_commit != '' && inputs.repo_commit || 'main' }}
           submodules: recursive
 
       - name: Checkout tweak repo
-        if: ${{ inputs.tweak_commit == '' }}
         uses: actions/checkout@v4
         with:
           repository: NeoFreeBird/tweak
           path: tweak
+          ref: ${{ inputs.tweak_commit != '' && inputs.tweak_commit || 'master' }}
           submodules: recursive
 
-      - name: Checkout tweak repo at specific ref
-        if: ${{ inputs.tweak_commit != '' }}
-        uses: actions/checkout@v4
-        with:
-          repository: NeoFreeBird/tweak
-          path: tweak
-          ref: ${{ inputs.tweak_commit }}
-          submodules: recursive
-
-      - name: Install dependencies
+      - name: Install Homebrew dependencies
         run: |
           set -euxo pipefail
           brew install make dpkg ldid wget
-          python3 -m pip install --upgrade pip
-          python3 -m pip install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Add GNU Make to PATH
         run: |
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cyan
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --force-reinstall "https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip"
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -100,15 +94,17 @@ jobs:
       - name: Download iOS SDK
         run: |
           set -euxo pipefail
+
+          rm -rf sdks
           git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/ sdks
           cd sdks
           git sparse-checkout init --no-cone
           git sparse-checkout set "iPhoneOS${{ inputs.sdk_version }}.sdk"
           git checkout
+
           mkdir -p "${THEOS}/sdks"
+          rm -rf "${THEOS}/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk"
           mv "iPhoneOS${{ inputs.sdk_version }}.sdk" "${THEOS}/sdks/"
-        env:
-          THEOS: ${{ github.workspace }}/theos
 
       - name: Prepare Twitter/X IPA
         run: |
@@ -124,26 +120,26 @@ jobs:
           APP_PATH="${GITHUB_WORKSPACE}/main/tmp/Payload/Twitter.app"
           test -d "$APP_PATH"
 
-          X_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
-          echo "X_VERSION=${X_VERSION}" >> "$GITHUB_ENV"
-          echo "$X_VERSION"
-        env:
-          IPA_URL: ${{ inputs.decrypted_ipa_url }}
+          X_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")"
+          echo "X_VERSION=$X_VERSION" >> "$GITHUB_ENV"
+          echo "X_VERSION=$X_VERSION"
 
       - name: Build tweak with Theos
         run: |
           set -euxo pipefail
+
           cd "${GITHUB_WORKSPACE}/tweak"
           sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ inputs.sdk_version }}:${{ inputs.target_version }}/" Makefile
           make clean package
-        env:
-          THEOS: ${{ github.workspace }}/theos
 
       - name: Copy deb to main/packages
         run: |
           set -euxo pipefail
+
           mkdir -p "${GITHUB_WORKSPACE}/main/packages"
-          find "${GITHUB_WORKSPACE}/tweak" -type f -name "*.deb" -exec cp {} "${GITHUB_WORKSPACE}/main/packages/" \;
+          find "${GITHUB_WORKSPACE}/tweak/packages" -type f -name "*.deb" -exec cp {} "${GITHUB_WORKSPACE}/main/packages/" \;
+
+          echo "Files in main/packages after copy:"
           ls -lh "${GITHUB_WORKSPACE}/main/packages"
 
       - name: Apply patches and inject tweak
@@ -155,8 +151,8 @@ jobs:
           PATCH_SRC="${WORKROOT}/main/assets/main"
           PKG_DIR="${WORKROOT}/main/packages"
           TEMP_IPA="${PKG_DIR}/temp.ipa"
-          OUT_IPA="${PKG_DIR}/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.ipa"
-          OUT_TIPA="${PKG_DIR}/NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.tipa"
+          OUT_IPA="${PKG_DIR}/NeoFreeBird_${{ github.run_id }}_${X_VERSION}.ipa"
+          OUT_TIPA="${PKG_DIR}/NeoFreeBird_${{ github.run_id }}_${X_VERSION}.tipa"
 
           test -d "$APP_DIR"
           mkdir -p "$PKG_DIR"
@@ -171,20 +167,24 @@ jobs:
             exit 1
           fi
 
+          rm -f "$TEMP_IPA"
           cd "${WORKROOT}/main/tmp"
           zip -qr "$TEMP_IPA" Payload
 
-          cd "${WORKROOT}"
-          python3 -m pyzule -i "$TEMP_IPA" -f "$DEB_FILE" -o "$OUT_IPA"
+          cd "$WORKROOT"
+          cyan -i "$TEMP_IPA" -f "$DEB_FILE" -o "$OUT_IPA"
 
           cp "$OUT_IPA" "$OUT_TIPA"
+
+          echo "Created files:"
           ls -lh "$OUT_IPA" "$OUT_TIPA"
 
-      - name: Pass package name
+      - name: Pass package names
         id: package_name
         run: |
-          echo "ipa_package=NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.ipa" >> "$GITHUB_OUTPUT"
-          echo "tipa_package=NeoFreeBird_${{ github.run_id }}_${{ env.X_VERSION }}.tipa" >> "$GITHUB_OUTPUT"
+          set -euxo pipefail
+          echo "ipa_package=NeoFreeBird_${{ github.run_id }}_${X_VERSION}.ipa" >> "$GITHUB_OUTPUT"
+          echo "tipa_package=NeoFreeBird_${{ github.run_id }}_${X_VERSION}.tipa" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
