@@ -33,6 +33,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
   build-and-inject:
     name: Build NeoFreeBird
     runs-on: macos-13
