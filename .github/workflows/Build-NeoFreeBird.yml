@@ -45,6 +45,7 @@ jobs:
 
     env:
       THEOS: ${{ github.workspace }}/theos
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout main repo
@@ -66,10 +67,16 @@ jobs:
       - name: Install Homebrew dependencies
         run: |
           set -euxo pipefail
-          brew install make dpkg ldid wget
+          brew install make dpkg ldid wget rsync unzip zip
+          brew --prefix
+          which make || true
+          which gmake || true
+          which wget
+          which ldid
 
       - name: Add GNU Make to PATH
         run: |
+          set -euxo pipefail
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
       - name: Set up Python
@@ -80,8 +87,11 @@ jobs:
       - name: Install cyan
         run: |
           set -euxo pipefail
+          python --version
           python -m pip install --upgrade pip
           python -m pip install --force-reinstall "https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip"
+          which cyan || true
+          python -m pip show pyzule-rw || true
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -90,6 +100,13 @@ jobs:
           ref: master
           path: theos
           submodules: recursive
+
+      - name: Verify Theos checkout
+        run: |
+          set -euxo pipefail
+          test -d "${THEOS}"
+          ls -la "${THEOS}"
+          test -f "${THEOS}/makefiles/common.mk"
 
       - name: Download iOS SDK
         run: |
@@ -102,9 +119,14 @@ jobs:
           git sparse-checkout set "iPhoneOS${{ inputs.sdk_version }}.sdk"
           git checkout
 
+          test -d "iPhoneOS${{ inputs.sdk_version }}.sdk"
+
           mkdir -p "${THEOS}/sdks"
           rm -rf "${THEOS}/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk"
           mv "iPhoneOS${{ inputs.sdk_version }}.sdk" "${THEOS}/sdks/"
+
+          test -d "${THEOS}/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk"
+          ls -la "${THEOS}/sdks"
 
       - name: Prepare Twitter/X IPA
         run: |
@@ -115,14 +137,29 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/main/tmp"
 
           wget "$IPA_URL" --no-verbose -O "${GITHUB_WORKSPACE}/main/packages/com.atebits.Tweetie2.ipa"
+          test -f "${GITHUB_WORKSPACE}/main/packages/com.atebits.Tweetie2.ipa"
+
           unzip -q "${GITHUB_WORKSPACE}/main/packages/com.atebits.Tweetie2.ipa" -d "${GITHUB_WORKSPACE}/main/tmp"
 
           APP_PATH="${GITHUB_WORKSPACE}/main/tmp/Payload/Twitter.app"
           test -d "$APP_PATH"
+          test -f "$APP_PATH/Info.plist"
 
           X_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")"
           echo "X_VERSION=$X_VERSION" >> "$GITHUB_ENV"
           echo "X_VERSION=$X_VERSION"
+
+          ls -la "${GITHUB_WORKSPACE}/main/tmp/Payload"
+          ls -la "$APP_PATH" | head -100
+        env:
+          IPA_URL: ${{ inputs.decrypted_ipa_url }}
+
+      - name: Verify tweak files
+        run: |
+          set -euxo pipefail
+          ls -la "${GITHUB_WORKSPACE}/tweak"
+          test -f "${GITHUB_WORKSPACE}/tweak/Makefile"
+          sed -n '1,120p' "${GITHUB_WORKSPACE}/tweak/Makefile"
 
       - name: Build tweak with Theos
         run: |
@@ -130,17 +167,27 @@ jobs:
 
           cd "${GITHUB_WORKSPACE}/tweak"
           sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ inputs.sdk_version }}:${{ inputs.target_version }}/" Makefile
+
+          echo "Updated Makefile TARGET:"
+          grep '^TARGET' Makefile || true
+
           make clean package
+
+          echo "Built packages:"
+          find . -type f -name "*.deb" -print
 
       - name: Copy deb to main/packages
         run: |
           set -euxo pipefail
 
           mkdir -p "${GITHUB_WORKSPACE}/main/packages"
-          find "${GITHUB_WORKSPACE}/tweak/packages" -type f -name "*.deb" -exec cp {} "${GITHUB_WORKSPACE}/main/packages/" \;
+          find "${GITHUB_WORKSPACE}/tweak" -type f -name "*.deb" -exec cp {} "${GITHUB_WORKSPACE}/main/packages/" \;
 
           echo "Files in main/packages after copy:"
           ls -lh "${GITHUB_WORKSPACE}/main/packages"
+
+          DEB_COUNT="$(find "${GITHUB_WORKSPACE}/main/packages" -maxdepth 1 -type f -name '*.deb' | wc -l | tr -d ' ')"
+          test "$DEB_COUNT" -ge 1
 
       - name: Apply patches and inject tweak
         run: |
@@ -158,7 +205,10 @@ jobs:
           mkdir -p "$PKG_DIR"
 
           if [ -d "$PATCH_SRC" ]; then
+            echo "Applying patches from $PATCH_SRC"
             rsync -av "$PATCH_SRC/" "$APP_DIR/"
+          else
+            echo "No patch directory found at $PATCH_SRC"
           fi
 
           DEB_FILE="$(find "$PKG_DIR" -maxdepth 1 -type f -name '*.deb' | head -n1)"
@@ -167,14 +217,19 @@ jobs:
             exit 1
           fi
 
+          echo "Using deb: $DEB_FILE"
+
           rm -f "$TEMP_IPA"
           cd "${WORKROOT}/main/tmp"
           zip -qr "$TEMP_IPA" Payload
+          test -f "$TEMP_IPA"
 
           cd "$WORKROOT"
           cyan -i "$TEMP_IPA" -f "$DEB_FILE" -o "$OUT_IPA"
 
+          test -f "$OUT_IPA"
           cp "$OUT_IPA" "$OUT_TIPA"
+          test -f "$OUT_TIPA"
 
           echo "Created files:"
           ls -lh "$OUT_IPA" "$OUT_TIPA"
