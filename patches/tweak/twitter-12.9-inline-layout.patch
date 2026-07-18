@@ -1,0 +1,23 @@
+diff --git a/BHDownloadInlineButton.h b/BHDownloadInlineButton.h
+index 6cecac5..933fca0 100644
+--- a/BHDownloadInlineButton.h
++++ b/BHDownloadInlineButton.h
+@@ -41,6 +41,7 @@ NS_ASSUME_NONNULL_BEGIN
+ - (BOOL)shouldShowCount;
+ - (double)extraWidth;
+ - (CGFloat)trailingEdgeInset;
++- (CGFloat)horizontalLayoutOffset;
+ - (NSUInteger)touchInsetPriority;
+ - (NSUInteger)alternateInlineActionType;
+ - (NSUInteger)visibility;
+diff --git a/BHDownloadInlineButton.m b/BHDownloadInlineButton.m
+index a3886b0..945b3e9 100644
+--- a/BHDownloadInlineButton.m
++++ b/BHDownloadInlineButton.m
+@@ -156,5 +156,6 @@ BH_METRIC(extraWidth,                 40.0)
+ BH_METRIC(extraWidthWithStyle,        40.0)
+ BH_METRIC(trailingEdgeInset,          6.0)
++BH_METRIC(horizontalLayoutOffset,     0.0)
+ BH_METRIC(visibility,                 (NSUInteger)1)
+ BH_METRIC(alternateInlineActionType,  (NSUInteger)6)
+ BH_METRIC(touchInsetPriority,         (NSUInteger)2)

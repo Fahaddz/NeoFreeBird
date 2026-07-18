@@ -51,7 +51,10 @@ jobs:
       - name: Checkout main repo
         uses: actions/checkout@v4
         with:
-          repository: NeoFreeBird/app
+          # Build the repository that owns this workflow. On a fork this must
+          # not silently fall back to NeoFreeBird/app, otherwise local fixes and
+          # assets are ignored.
+          repository: ${{ github.repository }}
           path: main
           ref: ${{ inputs.repo_commit != '' && inputs.repo_commit || 'main' }}
           submodules: recursive
@@ -63,6 +66,25 @@ jobs:
           path: tweak
           ref: ${{ inputs.tweak_commit != '' && inputs.tweak_commit || 'master' }}
           submodules: recursive
+
+      - name: Apply tweak compatibility patches
+        run: |
+          set -euxo pipefail
+
+          PATCH_FILE="${GITHUB_WORKSPACE}/main/patches/tweak/twitter-12.9-inline-layout.patch"
+          test -f "$PATCH_FILE"
+          cd "${GITHUB_WORKSPACE}/tweak"
+
+          if git apply --check "$PATCH_FILE"; then
+            git apply "$PATCH_FILE"
+          elif git apply --reverse --check "$PATCH_FILE"; then
+            echo "Compatibility patch is already present in the selected tweak revision."
+          else
+            echo "Compatibility patch does not apply to the selected tweak revision."
+            exit 1
+          fi
+
+          grep -n "horizontalLayoutOffset" BHDownloadInlineButton.h BHDownloadInlineButton.m
 
       - name: Install Homebrew dependencies
         run: |
