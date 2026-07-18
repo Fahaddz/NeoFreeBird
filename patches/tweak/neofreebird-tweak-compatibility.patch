@@ -1,0 +1,96 @@
+diff --git a/BHDownloadInlineButton.h b/BHDownloadInlineButton.h
+index 6cecac5..933fca0 100644
+--- a/BHDownloadInlineButton.h
++++ b/BHDownloadInlineButton.h
+@@ -41,6 +41,7 @@ NS_ASSUME_NONNULL_BEGIN
+ - (BOOL)shouldShowCount;
+ - (double)extraWidth;
+ - (CGFloat)trailingEdgeInset;
++- (CGFloat)horizontalLayoutOffset;
+ - (NSUInteger)touchInsetPriority;
+ - (NSUInteger)alternateInlineActionType;
+ - (NSUInteger)visibility;
+diff --git a/BHDownloadInlineButton.m b/BHDownloadInlineButton.m
+index a3886b0..945b3e9 100644
+--- a/BHDownloadInlineButton.m
++++ b/BHDownloadInlineButton.m
+@@ -156,5 +156,6 @@ BH_METRIC(extraWidth,                 40.0)
+ BH_METRIC(extraWidthWithStyle,        40.0)
+ BH_METRIC(trailingEdgeInset,          6.0)
++BH_METRIC(horizontalLayoutOffset,     0.0)
+ BH_METRIC(visibility,                 (NSUInteger)1)
+ BH_METRIC(alternateInlineActionType,  (NSUInteger)6)
+ BH_METRIC(touchInsetPriority,         (NSUInteger)2)
+diff --git a/BHTManager.m b/BHTManager.m
+index 6b6f5a13..96511d71 100644
+--- a/BHTManager.m
++++ b/BHTManager.m
+@@ -6,7 +6,6 @@
+ //
+ 
+ #import "BHTManager.h"
+-#import "SettingsViewController.h"
+ #import "BHTBundle/BHTBundle.h"
+ #import "ModernSettingsViewController.h"
+ 
+diff --git a/Makefile b/Makefile
+index 15531657..56eb42f9 100644
+--- a/Makefile
++++ b/Makefile
+@@ -5,10 +5,9 @@ DEBUG = 1
+ 
+ TWEAK_NAME = BHTwitter
+ 
+-BHTwitter_FILES = Tweak.x ModernSettingsViewController.m $(wildcard *.m BHDownload/*.m BHTBundle/*.m Colours/*.m JGProgressHUD/*.m SAMKeychain/*.m AppIcon/*.m CustomTabBar/*.m ThemeColor/*.m)
++BHTwitter_FILES = Tweak.x ModernSettingsViewController.m $(filter-out SettingsViewController.m, $(wildcard *.m)) $(wildcard BHDownload/*.m BHTBundle/*.m Colours/*.m JGProgressHUD/*.m SAMKeychain/*.m AppIcon/*.m CustomTabBar/*.m ThemeColor/*.m)
+ BHTwitter_FRAMEWORKS = UIKit Foundation AVFoundation AVKit CoreMotion GameController VideoToolbox Accelerate CoreMedia CoreImage CoreGraphics ImageIO Photos CoreServices SystemConfiguration SafariServices Security QuartzCore WebKit SceneKit
+-BHTwitter_PRIVATE_FRAMEWORKS = Preferences
+-BHTwitter_EXTRA_FRAMEWORKS = Cephei CepheiPrefs CepheiUI
++
+ BHTwitter_OBJ_FILES = $(shell find lib -name '*.a')
+ BHTwitter_LIBRARIES = sqlite3 bz2 c++ iconv z
+ BHTwitter_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-nullability-completeness -Wno-unused-function -Wno-unused-property-ivar -Wno-error
+diff --git a/ModernSettingsViewController.m b/ModernSettingsViewController.m
+index f3944c54..c31c43a0 100644
+--- a/ModernSettingsViewController.m
++++ b/ModernSettingsViewController.m
+@@ -1680,6 +1680,13 @@ - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSIntege
+     return UITableViewAutomaticDimension;
+ }
+ 
++- (void)switchChanged:(UISwitch *)sender {
++    NSString *key = objc_getAssociatedObject(sender, @"prefKey");
++    if (key) {
++        [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:key];
++    }
++}
++
+ @end
+ 
+ // ==============================
+diff --git a/Tweak.x b/Tweak.x
+index 9a84bb02..d355fe0d 100644
+--- a/Tweak.x
++++ b/Tweak.x
+@@ -23,8 +23,6 @@
+ #import "TWHeaders.h"
+ #import "SAMKeychain/SAMKeychain.h"
+ #import "CustomTabBar/BHCustomTabBarUtility.h"
+-#import <Preferences/PSListController.h>
+-#import <Preferences/PSSpecifier.h>
+ #import "ModernSettingsViewController.h"
+ 
+ @class T1SettingsViewController;
+@@ -2149,12 +2147,6 @@ static void BHTApplyCopyButtonStyle(UIButton *copyButton, T1ProfileHeaderView *h
+ }
+ %end
+ 
+-%hook HBForceCepheiPrefs
+-+ (BOOL)forceCepheiPrefsWhichIReallyNeedToAccessAndIKnowWhatImDoingISwear {
+-    return YES;
+-}
+-%end
+-
+ // MARK: Show Scroll Bar
+ %hook TFNTableView
+ - (void)setShowsVerticalScrollIndicator:(BOOL)arg1 {

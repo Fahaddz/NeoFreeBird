@@ -71,7 +71,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          PATCH_FILE="${GITHUB_WORKSPACE}/main/patches/tweak/twitter-12.9-inline-layout.patch"
+          PATCH_FILE="${GITHUB_WORKSPACE}/main/patches/tweak/neofreebird-tweak-compatibility.patch"
           test -f "$PATCH_FILE"
           cd "${GITHUB_WORKSPACE}/tweak"
 
@@ -84,7 +84,11 @@ jobs:
             exit 1
           fi
 
-          grep -n "horizontalLayoutOffset" BHDownloadInlineButton.h BHDownloadInlineButton.m
+          grep -F -n "horizontalLayoutOffset" BHDownloadInlineButton.h BHDownloadInlineButton.m
+          grep -F -n "switchChanged:(UISwitch *)sender" ModernSettingsViewController.m
+          grep -F -n "filter-out SettingsViewController.m" Makefile
+          ! grep -q '^BHTwitter_PRIVATE_FRAMEWORKS = Preferences' Makefile
+          ! grep -q '^BHTwitter_EXTRA_FRAMEWORKS = Cephei' Makefile
 
       - name: Install Homebrew dependencies
         run: |
